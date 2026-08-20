@@ -310,9 +310,9 @@ mod tests {
     fn auth() -> AuthFile {
         serde_json::from_value(json!({
             "auth_mode": "chatgpt",
-            "account_id": "account-123",
             "tokens": {
-                "access_token": "test-token"
+                "access_token": "test-token",
+                "account_id": "account-123"
             }
         }))
         .unwrap()

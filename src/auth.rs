@@ -18,6 +18,7 @@ pub struct AuthFile {
 struct Tokens {
     id_token: Option<String>,
     access_token: Option<String>,
+    account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,7 +41,9 @@ pub fn auth_mode(auth: &AuthFile) -> Option<&str> {
 }
 
 pub fn auth_account_id(auth: &AuthFile) -> Option<&str> {
-    auth.account_id.as_deref()
+    auth.account_id
+        .as_deref()
+        .or_else(|| auth.tokens.as_ref()?.account_id.as_deref())
 }
 
 pub fn auth_access_token(auth: &AuthFile) -> Option<&str> {
@@ -199,10 +202,10 @@ mod tests {
     fn auth_json(email: &str) -> String {
         json!({
             "auth_mode": "chatgpt",
-            "account_id": "account-123",
             "tokens": {
                 "id_token": id_token_with_email(email, false),
-                "access_token": "preserved-secret"
+                "access_token": "preserved-secret",
+                "account_id": "account-123"
             },
             "unknown_future_field": true
         })
@@ -257,6 +260,20 @@ mod tests {
 
         assert_eq!(auth_account_id(&auth), Some("account-123"));
         assert_eq!(auth_access_token(&auth), Some("preserved-secret"));
+    }
+
+    #[test]
+    fn supports_legacy_top_level_account_id() {
+        let auth: AuthFile = serde_json::from_value(json!({
+            "auth_mode": "chatgpt",
+            "account_id": "legacy-account",
+            "tokens": {
+                "access_token": "test-token"
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(auth_account_id(&auth), Some("legacy-account"));
     }
 
     #[test]
