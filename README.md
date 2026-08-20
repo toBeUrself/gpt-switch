@@ -8,6 +8,7 @@
 
 - 给当前 Codex 账号设置别名并保存
 - 查看已保存账号及当前账号
+- 查看账号剩余额度、可用状态和重置倒计时
 - 在已保存账号之间切换
 - 删除不再需要的账号
 - 移除当前本地凭据，为登录新账号做准备
@@ -84,6 +85,14 @@ gpt-switch add work
 gpt-switch list
 ```
 
+`list` 默认读取最近一次保存的额度快照，不会联网。主动刷新所有账号的额度：
+
+```bash
+gpt-switch list --refresh
+```
+
+额度接口失败不会影响账号列表、保存或切换；工具会保留最近一次成功获取的快照，并显示更新时间。长期未使用账号的 `access_token` 可能已经过期，此时需要切换并重新打开 Codex，让 Codex 刷新登录凭据后再获取最新额度。
+
 切换账号：
 
 > 执行切换前，请先完全退出 Codex App 和正在运行的 Codex CLI，避免运行中的进程重新写回旧凭据。
@@ -132,6 +141,7 @@ gpt-switch use personal
 ```text
 ~/.codex/auth.json
 ~/.codex/gpt-switch/accounts/<alias>/auth.json
+~/.codex/gpt-switch/accounts/<alias>/usage.json
 ~/.codex/gpt-switch/login-backup.json
 ```
 
@@ -139,6 +149,7 @@ gpt-switch use personal
 
 - `auth.json` 是 Codex 当前使用的活动凭据。
 - `accounts/<alias>/auth.json` 是各账号的凭据快照。
+- `accounts/<alias>/usage.json` 是最近一次成功获取的额度、重置时间及抓取时间。
 - `login-backup.json` 是执行 `login-new` 前额外保存的最近一次备份。
 
 ## 安全说明
@@ -147,6 +158,7 @@ gpt-switch use personal
 - 凭据以本地文件形式保存，没有额外加密；安全性依赖操作系统账号和文件权限。
 - 工具只解析 JWT 中的邮箱用于本地账号识别，不校验 JWT 签名，也不会将其用于服务端认证或权限判断。
 - `login-new` 只移除本地活动文件，不会调用 `codex logout`，因此不会主动使远程 token 失效。
+- 额度查询只会把 `access_token` 发送到 OpenAI 的 `https://chatgpt.com/backend-api/wham/usage`，不会把 token 写入 `usage.json` 或输出到终端。
 
 ## 当前限制
 
@@ -154,6 +166,7 @@ gpt-switch use personal
 - 需要在 Codex 完全退出时进行切换，当前版本不会自动检测运行中的 Codex 进程。
 - 主要支持包含 `id_token` 和邮箱信息的 ChatGPT 登录凭据，不适用于纯 API Key 账号切换。
 - 当前没有进程锁，不建议同时运行多个 `gpt-switch` 命令。
+- 额度查询使用的是 Codex 当前使用的 ChatGPT 后端路径，不是稳定的公开 REST API；如果 OpenAI 调整接口，账号切换仍可继续，但额度刷新可能暂时不可用。
 
 ## 开发与验证
 

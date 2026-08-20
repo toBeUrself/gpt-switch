@@ -1,4 +1,8 @@
-use crate::auth::{auth_email, auth_mode, copy_auth_atomically, read_auth_from};
+use crate::auth::{AuthFile, auth_email, auth_mode, copy_auth_atomically, read_auth_from};
+use crate::usage::{
+    UsageSnapshot, UsageWindow, fetch_usage, format_remaining, format_reset, format_updated,
+    format_usable, read_usage, save_usage, unix_now,
+};
 
 use anyhow::{Context, Result};
 use comfy_table::Table;
@@ -25,6 +29,10 @@ fn account_dir(name: &str) -> Result<PathBuf> {
 
 fn saved_auth_path(name: &str) -> Result<PathBuf> {
     Ok(account_dir(name)?.join("auth.json"))
+}
+
+fn saved_usage_path(name: &str) -> Result<PathBuf> {
+    Ok(account_dir(name)?.join("usage.json"))
 }
 
 fn login_backup_path() -> Result<PathBuf> {
@@ -85,7 +93,7 @@ fn find_saved_account_by_email(email: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-fn sync_current_account() -> Result<String> {
+fn sync_current_account() -> Result<(String, AuthFile)> {
     let current_path = auth_path()?;
 
     if !current_path.exists() {
@@ -104,7 +112,57 @@ fn sync_current_account() -> Result<String> {
 
     copy_auth_atomically(&current_path, &saved_path)?;
 
-    Ok(saved_name)
+    Ok((saved_name, current_auth))
+}
+
+fn refresh_usage(name: &str, auth: &AuthFile) -> Result<UsageSnapshot> {
+    let usage = fetch_usage(auth)?;
+    save_usage(&saved_usage_path(name)?, &usage)?;
+
+    Ok(usage)
+}
+
+fn try_refresh_usage(name: &str, auth: &AuthFile) -> Option<UsageSnapshot> {
+    match refresh_usage(name, auth) {
+        Ok(usage) => Some(usage),
+        Err(error) => {
+            eprintln!("警告: 无法刷新账号 `{name}` 的额度信息: {error:#}");
+            None
+        }
+    }
+}
+
+fn cached_usage(name: &str) -> Option<UsageSnapshot> {
+    let path = match saved_usage_path(name) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("警告: 无法确定账号 `{name}` 的额度文件路径: {error:#}");
+            return None;
+        }
+    };
+
+    match read_usage(&path) {
+        Ok(usage) => usage,
+        Err(error) => {
+            eprintln!("警告: 无法读取账号 `{name}` 的额度缓存: {error:#}");
+            None
+        }
+    }
+}
+
+fn format_window(window: Option<&UsageWindow>, now: i64) -> String {
+    let remaining = format_remaining(window, now);
+    let reset = format_reset(window, now);
+
+    if remaining == reset {
+        remaining
+    } else if remaining == "-" {
+        reset
+    } else if reset == "-" {
+        remaining
+    } else {
+        format!("{remaining} / {reset}")
+    }
 }
 
 pub fn show_current_account() -> Result<()> {
@@ -175,14 +233,19 @@ pub fn add_account(name: &str) -> Result<()> {
 
     copy_auth_atomically(&source, &target).with_context(|| format!("无法保存账号 `{name}`"))?;
 
+    let usage = try_refresh_usage(name, &current_auth);
+
     println!("已保存账号");
     println!("Alias: {name}");
     println!("Email: {email}");
+    if usage.is_some() {
+        println!("额度信息: 已更新");
+    }
 
     Ok(())
 }
 
-pub fn list_accounts() -> Result<()> {
+pub fn list_accounts(refresh: bool) -> Result<()> {
     let dir = accounts_dir()?;
 
     if !dir.exists() {
@@ -192,15 +255,14 @@ pub fn list_accounts() -> Result<()> {
 
     let current_path = auth_path()?;
 
-    let current_email = if current_path.exists() {
-        let auth = read_auth_from(&current_path)?;
-
-        auth_email(&auth)?
+    let current_auth = if current_path.exists() {
+        Some(read_auth_from(&current_path)?)
     } else {
         None
     };
+    let current_email = current_auth.as_ref().map(auth_email).transpose()?.flatten();
 
-    let mut accounts: Vec<(String, Option<String>, bool)> = Vec::new();
+    let mut accounts: Vec<(String, Option<String>, bool, Option<UsageSnapshot>)> = Vec::new();
 
     for entry in
         fs::read_dir(&dir).with_context(|| format!("无法读取账号目录: {}", dir.display()))?
@@ -215,13 +277,12 @@ pub fn list_accounts() -> Result<()> {
 
         let saved_path = entry.path().join("auth.json");
 
-        let saved_email = if saved_path.exists() {
-            let saved_auth = read_auth_from(&saved_path)?;
-
-            auth_email(&saved_auth)?
+        let saved_auth = if saved_path.exists() {
+            Some(read_auth_from(&saved_path)?)
         } else {
             None
         };
+        let saved_email = saved_auth.as_ref().map(auth_email).transpose()?.flatten();
 
         let is_current = match (&current_email, &saved_email) {
             (Some(current), Some(saved)) => current.eq_ignore_ascii_case(saved),
@@ -229,7 +290,21 @@ pub fn list_accounts() -> Result<()> {
             _ => false,
         };
 
-        accounts.push((name, saved_email, is_current));
+        let usage = if refresh {
+            let refresh_auth = if is_current {
+                current_auth.as_ref().or(saved_auth.as_ref())
+            } else {
+                saved_auth.as_ref()
+            };
+
+            refresh_auth
+                .and_then(|auth| try_refresh_usage(&name, auth))
+                .or_else(|| cached_usage(&name))
+        } else {
+            cached_usage(&name)
+        };
+
+        accounts.push((name, saved_email, is_current, usage));
     }
 
     accounts.sort_by(|a, b| a.0.cmp(&b.0));
@@ -241,12 +316,37 @@ pub fn list_accounts() -> Result<()> {
 
     let mut table = Table::new();
 
-    table.set_header(vec!["NAME", "EMAIL", "CURRENT"]);
+    table.set_header(vec![
+        "NAME",
+        "EMAIL",
+        "PLAN",
+        "PRIMARY (LEFT / RESET)",
+        "SECONDARY (LEFT / RESET)",
+        "USABLE",
+        "UPDATED",
+        "CURRENT",
+    ]);
 
-    for (name, email, is_current) in accounts {
+    let now = unix_now();
+
+    for (name, email, is_current, usage) in accounts {
         table.add_row(vec![
             name,
             email.unwrap_or_else(|| "-".to_string()),
+            usage
+                .as_ref()
+                .and_then(|value| value.plan_type.clone())
+                .unwrap_or_else(|| "-".to_string()),
+            format_window(usage.as_ref().and_then(|value| value.primary.as_ref()), now),
+            format_window(
+                usage.as_ref().and_then(|value| value.secondary.as_ref()),
+                now,
+            ),
+            format_usable(usage.as_ref(), now),
+            usage
+                .as_ref()
+                .map(|value| format_updated(value.fetched_at, now))
+                .unwrap_or_else(|| "-".to_string()),
             if is_current {
                 "*".to_string()
             } else {
@@ -277,11 +377,15 @@ pub fn switch_account(name: &str) -> Result<()> {
         auth_email(&target_auth)?.with_context(|| format!("无法识别账号 `{name}` 的邮箱"))?;
 
     let current_path = auth_path()?;
+    let mut target_usage_refreshed = false;
 
     // 如果当前有登录账号，
     // 先同步当前最新 credential。
     if current_path.exists() {
-        let current_name = sync_current_account()?;
+        let (current_name, current_auth) = sync_current_account()?;
+
+        try_refresh_usage(&current_name, &current_auth);
+        target_usage_refreshed = current_name == name;
 
         println!("已同步当前账号: {current_name}");
     } else {
@@ -299,6 +403,10 @@ pub fn switch_account(name: &str) -> Result<()> {
 
     if !switched_email.eq_ignore_ascii_case(&target_email) {
         anyhow::bail!("账号切换验证失败，预期 `{target_email}`，实际 `{switched_email}`");
+    }
+
+    if !target_usage_refreshed {
+        try_refresh_usage(name, &switched_auth);
     }
 
     println!();
@@ -366,7 +474,8 @@ pub fn login_new() -> Result<()> {
     })?;
 
     // 保存当前最新 token
-    sync_current_account()?;
+    let (_, current_auth) = sync_current_account()?;
+    try_refresh_usage(&saved_name, &current_auth);
 
     // 再做一份额外备份
     let backup_path = login_backup_path()?;

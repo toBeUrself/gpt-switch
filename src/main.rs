@@ -1,5 +1,6 @@
 mod account;
 mod auth;
+mod usage;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -22,7 +23,11 @@ enum Commands {
     },
 
     /// 查看已经保存的账号
-    List,
+    List {
+        /// 联网刷新所有账号的额度信息
+        #[arg(long)]
+        refresh: bool,
+    },
 
     /// 查看当前正在使用的账号
     Current,
@@ -51,8 +56,8 @@ fn main() -> Result<()> {
             account::add_account(&name)?;
         }
 
-        Commands::List => {
-            account::list_accounts()?;
+        Commands::List { refresh } => {
+            account::list_accounts(refresh)?;
         }
 
         Commands::Current => {

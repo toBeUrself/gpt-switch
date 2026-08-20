@@ -10,12 +10,14 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Deserialize)]
 pub struct AuthFile {
     auth_mode: Option<String>,
+    account_id: Option<String>,
     tokens: Option<Tokens>,
 }
 
 #[derive(Debug, Deserialize)]
 struct Tokens {
     id_token: Option<String>,
+    access_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,6 +37,14 @@ pub fn read_auth_from(path: &Path) -> Result<AuthFile> {
 
 pub fn auth_mode(auth: &AuthFile) -> Option<&str> {
     auth.auth_mode.as_deref()
+}
+
+pub fn auth_account_id(auth: &AuthFile) -> Option<&str> {
+    auth.account_id.as_deref()
+}
+
+pub fn auth_access_token(auth: &AuthFile) -> Option<&str> {
+    auth.tokens.as_ref()?.access_token.as_deref()
 }
 
 pub fn auth_email(auth: &AuthFile) -> Result<Option<String>> {
@@ -189,6 +199,7 @@ mod tests {
     fn auth_json(email: &str) -> String {
         json!({
             "auth_mode": "chatgpt",
+            "account_id": "account-123",
             "tokens": {
                 "id_token": id_token_with_email(email, false),
                 "access_token": "preserved-secret"
@@ -238,6 +249,14 @@ mod tests {
 
         assert_eq!(auth_mode(&auth), Some("api_key"));
         assert_eq!(auth_email(&auth).unwrap(), None);
+    }
+
+    #[test]
+    fn reads_account_id_and_access_token() {
+        let auth: AuthFile = serde_json::from_str(&auth_json("user@example.com")).unwrap();
+
+        assert_eq!(auth_account_id(&auth), Some("account-123"));
+        assert_eq!(auth_access_token(&auth), Some("preserved-secret"));
     }
 
     #[test]
