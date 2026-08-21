@@ -1,7 +1,7 @@
 use crate::auth::{AuthFile, auth_email, auth_mode, copy_auth_atomically, read_auth_from};
 use crate::usage::{
-    UsageSnapshot, UsageWindow, fetch_usage, format_remaining, format_reset, format_updated,
-    format_usable, read_usage, save_usage, unix_now,
+    UsageSnapshot, fetch_usage, format_countdown, format_remaining, format_reset_time,
+    format_updated, format_usable, read_usage, save_usage, unix_now,
 };
 
 use anyhow::{Context, Result};
@@ -147,21 +147,6 @@ fn cached_usage(name: &str) -> Option<UsageSnapshot> {
             eprintln!("警告: 无法读取账号 `{name}` 的额度缓存: {error:#}");
             None
         }
-    }
-}
-
-fn format_window(window: Option<&UsageWindow>, now: i64) -> String {
-    let remaining = format_remaining(window, now);
-    let reset = format_reset(window, now);
-
-    if remaining == reset {
-        remaining
-    } else if remaining == "-" {
-        reset
-    } else if reset == "-" {
-        remaining
-    } else {
-        format!("{remaining} / {reset}")
     }
 }
 
@@ -320,8 +305,12 @@ pub fn list_accounts(refresh: bool) -> Result<()> {
         "NAME",
         "EMAIL",
         "PLAN",
-        "PRIMARY (LEFT / RESET)",
-        "SECONDARY (LEFT / RESET)",
+        "PRIMARY LEFT",
+        "PRIMARY RESET",
+        "PRIMARY COUNTDOWN",
+        "SECONDARY LEFT",
+        "SECONDARY RESET",
+        "SECONDARY COUNTDOWN",
         "USABLE",
         "UPDATED",
         "CURRENT",
@@ -337,8 +326,18 @@ pub fn list_accounts(refresh: bool) -> Result<()> {
                 .as_ref()
                 .and_then(|value| value.plan_type.clone())
                 .unwrap_or_else(|| "-".to_string()),
-            format_window(usage.as_ref().and_then(|value| value.primary.as_ref()), now),
-            format_window(
+            format_remaining(usage.as_ref().and_then(|value| value.primary.as_ref()), now),
+            format_reset_time(usage.as_ref().and_then(|value| value.primary.as_ref()), now),
+            format_countdown(usage.as_ref().and_then(|value| value.primary.as_ref()), now),
+            format_remaining(
+                usage.as_ref().and_then(|value| value.secondary.as_ref()),
+                now,
+            ),
+            format_reset_time(
+                usage.as_ref().and_then(|value| value.secondary.as_ref()),
+                now,
+            ),
+            format_countdown(
                 usage.as_ref().and_then(|value| value.secondary.as_ref()),
                 now,
             ),

@@ -1,7 +1,9 @@
 use crate::auth::{AuthFile, auth_access_token, auth_account_id};
 
 use anyhow::{Context, Result};
+use chrono::{Datelike, Local, TimeZone};
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -167,7 +169,38 @@ pub fn format_remaining(window: Option<&UsageWindow>, now: i64) -> String {
     format!("{remaining:.0}%")
 }
 
-pub fn format_reset(window: Option<&UsageWindow>, now: i64) -> String {
+pub fn format_reset_time(window: Option<&UsageWindow>, now: i64) -> String {
+    format_reset_time_in(window, now, &Local)
+}
+
+fn format_reset_time_in<Tz>(window: Option<&UsageWindow>, now: i64, timezone: &Tz) -> String
+where
+    Tz: TimeZone,
+    Tz::Offset: Display,
+{
+    let Some(resets_at) = window.and_then(|value| value.resets_at) else {
+        return "-".to_string();
+    };
+
+    if resets_at <= now {
+        return "待刷新".to_string();
+    }
+
+    let Some(reset_time) = timezone.timestamp_opt(resets_at, 0).single() else {
+        return "-".to_string();
+    };
+    let Some(now_time) = timezone.timestamp_opt(now, 0).single() else {
+        return "-".to_string();
+    };
+
+    if reset_time.year() == now_time.year() {
+        reset_time.format("%-m月%-d日 %H:%M").to_string()
+    } else {
+        reset_time.format("%Y年%-m月%-d日 %H:%M").to_string()
+    }
+}
+
+pub fn format_countdown(window: Option<&UsageWindow>, now: i64) -> String {
     let Some(resets_at) = window.and_then(|value| value.resets_at) else {
         return "-".to_string();
     };
@@ -279,6 +312,7 @@ fn set_private_permissions(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::FixedOffset;
     use serde_json::json;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -392,15 +426,27 @@ mod tests {
     }
 
     #[test]
-    fn formats_remaining_and_reset_countdown() {
+    fn formats_remaining_reset_time_and_countdown() {
+        let timezone = FixedOffset::east_opt(8 * 3600).unwrap();
+        let resets_at = timezone
+            .with_ymd_and_hms(2026, 8, 24, 8, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp();
         let window = UsageWindow {
             used_percent: 25.4,
             window_seconds: Some(18_000),
-            resets_at: Some(10_000),
+            resets_at: Some(resets_at),
         };
 
-        assert_eq!(format_remaining(Some(&window), 1_000), "75%");
-        assert_eq!(format_reset(Some(&window), 1_000), "2小时30分");
+        let now = resets_at - 9_000;
+
+        assert_eq!(format_remaining(Some(&window), now), "75%");
+        assert_eq!(
+            format_reset_time_in(Some(&window), now, &timezone),
+            "8月24日 08:00"
+        );
+        assert_eq!(format_countdown(Some(&window), now), "2小时30分");
     }
 
     #[test]
@@ -421,7 +467,8 @@ mod tests {
         };
 
         assert_eq!(format_remaining(Some(&window), 1_000), "待刷新");
-        assert_eq!(format_reset(Some(&window), 1_000), "待刷新");
+        assert_eq!(format_reset_time(Some(&window), 1_000), "待刷新");
+        assert_eq!(format_countdown(Some(&window), 1_000), "待刷新");
         assert_eq!(format_usable(Some(&usage), 1_000), "待刷新");
     }
 
