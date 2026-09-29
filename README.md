@@ -10,6 +10,7 @@
 - 查看已保存账号及当前账号
 - 查看账号剩余额度、可用状态和重置倒计时
 - 在已保存账号之间切换
+- 切换后自动重启 Codex background server
 - 删除不再需要的账号
 - 移除当前本地凭据，为登录新账号做准备
 - 写入前校验认证文件，并通过临时文件原子替换
@@ -97,13 +98,21 @@ gpt-switch list --refresh
 
 切换账号：
 
-> 执行切换前，请先完全退出 Codex App 和正在运行的 Codex CLI，避免运行中的进程重新写回旧凭据。
-
 ```bash
 gpt-switch use personal
 ```
 
-切换完成后重新打开 Codex。
+工具会先保存当前账号的最新凭据，再写入目标账号凭据，并自动执行：
+
+```bash
+codex app-server daemon restart
+```
+
+切换完成后，可以手动恢复会话：
+
+```bash
+codex resume
+```
 
 删除账号：
 
@@ -165,7 +174,7 @@ gpt-switch use personal
 ## 当前限制
 
 - 目前固定使用 `~/.codex`，尚未支持自定义 `CODEX_HOME`。
-- 需要在 Codex 完全退出时进行切换，当前版本不会自动检测运行中的 Codex 进程。
+- 切换时会重启 Codex daemon，但不会自动执行 `codex resume`。
 - 主要支持包含 `id_token` 和邮箱信息的 ChatGPT 登录凭据，不适用于纯 API Key 账号切换。
 - 当前没有进程锁，不建议同时运行多个 `gpt-switch` 命令。
 - 额度查询使用的是 Codex 当前使用的 ChatGPT 后端路径，不是稳定的公开 REST API；如果 OpenAI 调整接口，账号切换仍可继续，但额度刷新可能暂时不可用。

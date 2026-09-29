@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use comfy_table::Table;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn codex_home() -> Result<PathBuf> {
     let home = dirs::home_dir().context("无法获取当前用户的 Home 目录")?;
@@ -37,6 +38,19 @@ fn saved_usage_path(name: &str) -> Result<PathBuf> {
 
 fn login_backup_path() -> Result<PathBuf> {
     Ok(codex_home()?.join("gpt-switch").join("login-backup.json"))
+}
+
+fn restart_codex_daemon() -> Result<()> {
+    let status = Command::new("codex")
+        .args(["app-server", "daemon", "restart"])
+        .status()
+        .context("无法执行 `codex app-server daemon restart`")?;
+
+    if !status.success() {
+        anyhow::bail!("Codex daemon 重启失败，命令退出状态: {status}");
+    }
+
+    Ok(())
 }
 
 fn validate_account_name(name: &str) -> Result<()> {
@@ -404,6 +418,8 @@ pub fn switch_account(name: &str) -> Result<()> {
         anyhow::bail!("账号切换验证失败，预期 `{target_email}`，实际 `{switched_email}`");
     }
 
+    restart_codex_daemon()?;
+
     if !target_usage_refreshed {
         try_refresh_usage(name, &switched_auth);
     }
@@ -412,7 +428,8 @@ pub fn switch_account(name: &str) -> Result<()> {
     println!("已切换账号");
     println!("Alias: {name}");
     println!("Email: {target_email}");
-    println!("请完全退出并重新打开 Codex App / CLI");
+    println!("Codex daemon: 已重启");
+    println!("可执行 `codex resume` 恢复会话");
 
     Ok(())
 }
